@@ -39,7 +39,7 @@ int run_worker_ok(void) {
 }
 
 int run_worker_fail(void) {
-  printf("\n=== Worker: SIMULATED failure (not a real OS fault) ===\n");
+  printf("\n=== Worker: SIMULATED failure  ===\n");
   fflush(stdout);
   pid_t pid = fork();
   if (pid < 0) {
@@ -47,7 +47,8 @@ int run_worker_fail(void) {
     return 1;
   }
   if (pid == 0) {
-    printf("[worker %d] simulating a failure, exiting with code %d\n", getpid(), cfg.exit_code);
+    printf("[worker %d] simulating a failure, exiting with code %d\n", getpid(),
+           cfg.exit_code);
     fflush(stdout);
     exit(cfg.exit_code);
   }
@@ -60,7 +61,8 @@ int run_worker_fail(void) {
 /* Child limits its own CPU time to 1 second, then spins. The kernel sends
  * SIGXCPU when the limit is reached and the child is terminated. */
 int run_rlimit(void) {
-  printf("\n=== Resource limit: RLIMIT_CPU = %d second(s) ===\n", cfg.cpu_limit);
+  printf("\n=== Resource limit: RLIMIT_CPU = %d second(s) ===\n",
+         cfg.cpu_limit);
   fflush(stdout);
   pid_t pid = fork();
   if (pid < 0) {
@@ -68,12 +70,14 @@ int run_rlimit(void) {
     return 1;
   }
   if (pid == 0) {
-    struct rlimit rl = {cfg.cpu_limit, cfg.cpu_limit + 2}; /* soft: SIGXCPU, hard: SIGKILL */
+    struct rlimit rl = {cfg.cpu_limit,
+                        cfg.cpu_limit + 2}; /* soft: SIGXCPU, hard: SIGKILL */
     if (setrlimit(RLIMIT_CPU, &rl) < 0) {
       perror("setrlimit");
       exit(1);
     }
-    printf("[child %d] CPU limit set to %ds, now busy-looping\n", getpid(), cfg.cpu_limit);
+    printf("[child %d] CPU limit set to %ds, now busy-looping\n", getpid(),
+           cfg.cpu_limit);
     fflush(stdout);
     while (1)
       ;

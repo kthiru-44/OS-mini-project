@@ -13,10 +13,10 @@ campuscompute: $(OBJS)
 	$(CC) $(CFLAGS) -c $<
 
 clean:
-	rm -f $(OBJS) campuscompute campuscompute.log *.zip
+	rm -f $(OBJS) campuscompute campuscompute.log $(SRN).zip
 
 zip: clean
-	zip -r $(SRN).zip $(SRCS) project.h Makefile samples README.md DEMO_WALKTHROUGH.md VIVA_GUIDE.md PROJECT_STUDY_GUIDE.md
+	zip -r $(SRN).zip $(SRCS) project.h Makefile samples README.md
 	unzip -l $(SRN).zip
 	unzip -t $(SRN).zip
 
