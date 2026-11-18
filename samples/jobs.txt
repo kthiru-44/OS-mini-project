@@ -1,6 +1,5 @@
 # arrival burst priority
 0 7 3
 2 4 1
-4 9 2
-5 3 1
-8 6 4
+4 1 2
+5 4 1

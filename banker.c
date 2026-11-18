@@ -1,231 +1,141 @@
-#include "banker.h"
-#include "common.h"
+/* Banker's safety algorithm. Need = Max - Allocation. */
+#include "project.h"
+#include <stdio.h>
 
-typedef int Matrix[MAX_PROCESSES][MAX_RESOURCES];
+#define MAXP 10
+#define MAXR 10
 
 typedef struct {
   int p, r;
-  Matrix alloc, max;
-  int avail[MAX_RESOURCES];
+  int avail[MAXR], alloc[MAXP][MAXR], max[MAXP][MAXR];
 } State;
 
-static const State SAFE_STATE = {
-    .p = 5,
-    .r = 3,
-    .alloc = {{0, 1, 0}, {2, 0, 0}, {3, 0, 2}, {2, 1, 1}, {0, 0, 2}},
-    .max = {{7, 5, 3}, {3, 2, 2}, {9, 0, 2}, {2, 2, 2}, {4, 3, 3}},
-    .avail = {3, 3, 2},
-};
+static int check(const State *s) {
+  int need[MAXP][MAXR], work[MAXR], finish[MAXP] = {0}, seq[MAXP], n = 0;
 
-static const State UNSAFE_STATE = {
-    .p = 4,
-    .r = 3,
-    .alloc = {{3, 1, 2}, {2, 2, 1}, {2, 1, 1}, {1, 1, 1}},
-    .max = {{5, 4, 3}, {4, 4, 3}, {6, 3, 3}, {3, 3, 2}},
-    .avail = {0, 1, 0},
-};
-
-static void print_state(const State *s, Matrix need) {
-  printf("\nProcess | Allocation | Maximum | Need (= Max - Alloc)\n");
+  printf("      Alloc / Max / Need\n");
   for (int i = 0; i < s->p; i++) {
-    printf("  P%-4d | ", i);
-    for (int j = 0; j < s->r; j++)
-      printf("%d ", s->alloc[i][j]);
-    printf("     | ");
-    for (int j = 0; j < s->r; j++)
-      printf("%d ", s->max[i][j]);
-    printf("   | ");
-    for (int j = 0; j < s->r; j++)
-      printf("%d ", need[i][j]);
-    printf("\n");
-  }
-  printf("Available: ");
-  for (int j = 0; j < s->r; j++)
-    printf("%d ", s->avail[j]);
-  printf("\n\n");
-}
-
-/*
- * Banker's Safety Algorithm:
- * Checks whether the current resource allocation state is SAFE.
- * A state is safe if there exists a Safe Sequence <P0, P1, ... Pn-1>
- * where each process can finish by obtaining its maximum claim.
- */
-static bool is_safe(const State *s, Matrix need, int seq[]) {
-  int work[MAX_RESOURCES];
-  bool finished[MAX_PROCESSES] = {false};
-  int count = 0;
-
-  /* Step 1: Initialize Work = Available vector */
-  memcpy(work, s->avail, sizeof(work));
-
-  /* Step 2: Repeat until all processes finish or no progress can be made */
-  while (count < s->p) {
-    bool progress = false;
-
-    /* Find an unfinished process whose Need can be satisfied by current Work */
-    for (int i = 0; i < s->p; i++) {
-      if (finished[i])
-        continue;
-
-      bool fits = true;
-      for (int j = 0; j < s->r; j++) {
-        if (need[i][j] > work[j])
-          fits = false;
-      }
-      if (!fits)
-        continue;
-
-      /* Step 3: Process finishes, reclaims its allocated resources back to Work
-       */
-      for (int j = 0; j < s->r; j++)
-        work[j] += s->alloc[i][j];
-      printf("  P%d can finish (Need <= Work); Work becomes [ ", i);
-      for (int j = 0; j < s->r; j++)
-        printf("%d ", work[j]);
-      printf("]\n");
-
-      finished[i] = true;
-      seq[count++] = i;
-      progress = true;
-    }
-
-    /* If no process could proceed in this pass, system cannot make progress */
-    if (!progress)
-      break;
-  }
-
-  /* Step 4: If not all processes finished, report blocked processes (deadlock)
-   */
-  if (count < s->p) {
-    printf("  No remaining process has Need <= Work. Blocked: ");
-    for (int i = 0; i < s->p; i++) {
-      if (!finished[i])
-        printf("P%d ", i);
-    }
-    printf("\n");
-  }
-
-  /* Safe if and only if all processes finished */
-  return count == s->p;
-}
-
-static bool analyse(const State *s) {
-  Matrix need;
-  int seq[MAX_PROCESSES];
-
-  /* Step 1: Calculate Need Matrix = Maximum - Allocation */
-  for (int i = 0; i < s->p; i++) {
+    printf("P%d   ", i);
     for (int j = 0; j < s->r; j++)
       need[i][j] = s->max[i][j] - s->alloc[i][j];
+    for (int j = 0; j < s->r; j++) printf("%d ", s->alloc[i][j]);
+    printf("| ");
+    for (int j = 0; j < s->r; j++) printf("%d ", s->max[i][j]);
+    printf("| ");
+    for (int j = 0; j < s->r; j++) printf("%d ", need[i][j]);
+    printf("\n");
   }
-  print_state(s, need);
-
-  /* Step 2: Execute Safety Algorithm */
-  printf("Safety check:\n");
-  bool safe = is_safe(s, need, seq);
-
-  /* Step 3: Display Result and Safe Sequence (if safe) */
-  if (safe) {
-    printf("\nRESULT: SAFE state. Safe sequence: <");
-    for (int i = 0; i < s->p; i++)
-      printf(" P%d", seq[i]);
-    printf(" >\n");
-  } else {
-    printf("\nRESULT: UNSAFE state. No safe sequence exists; deadlock is "
-           "possible.\n");
+  printf("Available:");
+  for (int j = 0; j < s->r; j++) {
+    printf(" %d", s->avail[j]);
+    work[j] = s->avail[j];
   }
-  return safe;
-}
+  printf("\n");
 
-int banker_demo_safe(void) {
-  printf("\n=== Banker's algorithm: safe-state test case ===\n");
-  return analyse(&SAFE_STATE) ? 0 : 1;
-}
-
-int banker_demo_unsafe(void) {
-  printf("\n=== Banker's algorithm: unsafe-state test case ===\n");
-  return analyse(&UNSAFE_STATE) ? 1 : 0;
-}
-
-int banker_input_and_check(void) {
-  State s;
-  char prompt[64];
-
-  memset(&s, 0, sizeof(s));
-  printf("\n=== Banker's algorithm: custom input ===\n");
-  if (!read_int("Number of processes (1-10): ", 1, MAX_PROCESSES, &s.p))
-    return 1;
-  if (!read_int("Number of resource types (1-10): ", 1, MAX_RESOURCES, &s.r))
-    return 1;
-
-  for (int i = 0; i < s.p; i++) {
-    for (int j = 0; j < s.r; j++) {
-      snprintf(prompt, sizeof(prompt), "Allocation[P%d][R%d]: ", i, j);
-      if (!read_int(prompt, 0, 100, &s.alloc[i][j]))
-        return 1;
+  /* keep looking for a process whose Need fits in Work */
+  int progress = 1;
+  while (progress) {
+    progress = 0;
+    for (int i = 0; i < s->p; i++) {
+      if (finish[i])
+        continue;
+      int ok = 1;
+      for (int j = 0; j < s->r; j++)
+        if (need[i][j] > work[j])
+          ok = 0;
+      if (ok) {
+        for (int j = 0; j < s->r; j++)
+          work[j] += s->alloc[i][j]; /* it finishes and releases everything */
+        finish[i] = 1;
+        seq[n++] = i;
+        progress = 1;
+      }
     }
   }
-  for (int i = 0; i < s.p; i++) {
-    for (int j = 0; j < s.r; j++) {
-      snprintf(prompt, sizeof(prompt), "Maximum[P%d][R%d] (>= %d): ", i, j,
-               s.alloc[i][j]);
-      if (!read_int(prompt, s.alloc[i][j], 100, &s.max[i][j]))
-        return 1;
-    }
+
+  if (n == s->p) {
+    printf("SAFE state. Safe sequence:");
+    for (int i = 0; i < n; i++)
+      printf(" P%d%s", seq[i], i < n - 1 ? " ->" : "");
+    printf("\n");
+    return 1;
   }
-  for (int j = 0; j < s.r; j++) {
-    snprintf(prompt, sizeof(prompt), "Available[R%d]: ", j);
-    if (!read_int(prompt, 0, 100, &s.avail[j]))
+  printf("UNSAFE state: no process can be guaranteed to finish.\n");
+  return 0;
+}
+
+/* Reads one number; prints a prompt only when typing at the keyboard. */
+static int get(FILE *in, int prompt, const char *what, int lo, int hi, int *v) {
+  if (prompt)
+    printf("%s: ", what);
+  if (fscanf(in, "%d", v) != 1 || *v < lo || *v > hi) {
+    fprintf(stderr, "Error: %s must be a number from %d to %d\n", what, lo, hi);
+    return 1;
+  }
+  return 0;
+}
+
+/* File format: P R, then Available (R numbers), Allocation (P rows),
+ * Maximum (P rows). */
+static int read_state(FILE *in, int prompt, State *s) {
+  char name[64];
+  if (get(in, prompt, "Number of processes", 1, MAXP, &s->p) ||
+      get(in, prompt, "Number of resource types", 1, MAXR, &s->r))
+    return 1;
+  for (int j = 0; j < s->r; j++) {
+    snprintf(name, sizeof(name), "Available[R%d]", j);
+    if (get(in, prompt, name, 0, 1000, &s->avail[j]))
       return 1;
   }
-  analyse(&s);
-  return 0;
-}
-
-/* Reads whitespace-separated integers, skipping '#' comment lines. */
-static bool next_int(FILE *f, int *out) {
-  int c;
-  while ((c = fgetc(f)) != EOF) {
-    if (c == '#') {
-      while ((c = fgetc(f)) != EOF && c != '\n')
-        ;
-    } else if (c == '-' || (c >= '0' && c <= '9')) {
-      ungetc(c, f);
-      return fscanf(f, "%d", out) == 1;
+  for (int i = 0; i < s->p; i++)
+    for (int j = 0; j < s->r; j++) {
+      snprintf(name, sizeof(name), "Allocation[P%d][R%d]", i, j);
+      if (get(in, prompt, name, 0, 1000, &s->alloc[i][j]))
+        return 1;
     }
-  }
-  return false;
+  for (int i = 0; i < s->p; i++)
+    for (int j = 0; j < s->r; j++) {
+      snprintf(name, sizeof(name), "Maximum[P%d][R%d]", i, j);
+      if (get(in, prompt, name, 0, 1000, &s->max[i][j]))
+        return 1;
+      if (s->max[i][j] < s->alloc[i][j]) {
+        fprintf(stderr, "Error: Maximum cannot be less than Allocation\n");
+        return 1;
+      }
+    }
+  return 0;
 }
 
-/* File format: P R, then P rows of Allocation, P rows of Max, then Available.
- */
-int banker_from_file(const char *path) {
-  FILE *f = fopen(path, "r");
-  if (!f) {
-    printf("[Error] Cannot open \"%s\": %s\n", path, strerror(errno));
-    return 1;
-  }
+/* Custom state from --banker-file FILE, or typed in if no file is given. */
+int run_banker(void) {
   State s;
-  memset(&s, 0, sizeof(s));
-  bool ok = next_int(f, &s.p) && next_int(f, &s.r) && s.p >= 1 &&
-            s.p <= MAX_PROCESSES && s.r >= 1 && s.r <= MAX_RESOURCES;
-  for (int i = 0; ok && i < s.p; i++)
-    for (int j = 0; ok && j < s.r; j++)
-      ok = next_int(f, &s.alloc[i][j]) && s.alloc[i][j] >= 0;
-  for (int i = 0; ok && i < s.p; i++)
-    for (int j = 0; ok && j < s.r; j++)
-      ok = next_int(f, &s.max[i][j]) && s.max[i][j] >= s.alloc[i][j];
-  for (int j = 0; ok && j < s.r; j++)
-    ok = next_int(f, &s.avail[j]) && s.avail[j] >= 0;
-  fclose(f);
-  if (!ok) {
-    printf("[Error] %s: malformed state (need P R, Alloc, Max, Available; "
-           "Max >= Alloc)\n",
-           path);
+  FILE *f = stdin;
+  if (cfg.banker_file && !(f = fopen(cfg.banker_file, "r"))) {
+    perror(cfg.banker_file);
     return 1;
   }
-  printf("\n=== Banker's algorithm: state loaded from %s ===\n", path);
-  analyse(&s);
+  int rc = read_state(f, f == stdin, &s);
+  if (f != stdin)
+    fclose(f);
+  if (rc)
+    return 1;
+  printf("\n=== Banker's algorithm: custom state ===\n");
+  check(&s);
   return 0;
+}
+
+static const State BASE = {5, 3, {3, 3, 2},
+                           {{0, 1, 0}, {2, 0, 0}, {3, 0, 2}, {2, 1, 1}, {0, 0, 2}},
+                           {{7, 5, 3}, {3, 2, 2}, {9, 0, 2}, {2, 2, 2}, {4, 3, 3}}};
+
+int run_banker_safe(void) {
+  printf("\n=== Banker's algorithm: safe case ===\n");
+  return check(&BASE) ? 0 : 1;
+}
+
+int run_banker_unsafe(void) {
+  State s = BASE;
+  s.avail[0] = s.avail[1] = s.avail[2] = 0; /* nothing free -> nobody can finish */
+  printf("\n=== Banker's algorithm: unsafe case ===\n");
+  return check(&s) ? 1 : 0; /* success = detected unsafe */
 }

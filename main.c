@@ -1,280 +1,151 @@
-#include "banker.h"
-#include "common.h"
-#include "ipc.h"
-#include "logger.h"
-#include "rlimit.h"
-#include "scheduler.h"
-#include "worker.h"
-#include <sys/wait.h>
+#include "project.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-static Job jobs[MAX_JOBS];
-static int num_jobs;
-static const char *cli_arg; /* argument following a flag, e.g. --jobs FILE */
-
-/* Uses the CLI argument if given, otherwise prompts for it. */
-static const char *get_arg(const char *prompt, char *buf, size_t n) {
-  if (cli_arg)
-    return cli_arg;
-  printf("%s", prompt);
-  if (!fgets(buf, (int)n, stdin))
-    return NULL;
-  buf[strcspn(buf, "\r\n")] = '\0';
-  return buf[0] ? buf : NULL;
-}
+Config cfg = {NULL, 0, 2, 3, 4, 101, 5, 3, 1, NULL};
 
 typedef struct {
-  const char *flag; /* command-line form: ./campuscompute --<flag> */
-  const char *label;
-  int (*run)(void); /* 0 = success */
-  bool in_demo;     /* included in the integrated demonstration */
+  const char *flag;
+  const char *help;
+  int (*run)(void);
+  int in_demo; /* part of --demo? */
 } Command;
 
-static int cmd_input(void) { return scheduler_input_jobs(jobs, &num_jobs); }
-static int cmd_default(void) {
-  scheduler_load_default_jobs(jobs, &num_jobs);
-  printf("Loaded %d default jobs.\n", num_jobs);
-  return 0;
-}
-static int cmd_jobs_file(void) {
-  char buf[256];
-  const char *p = get_arg("Path to jobs file: ", buf, sizeof(buf));
-  return p ? scheduler_load_file(jobs, &num_jobs, p) : 1;
-}
-static int cmd_random(void) {
-  char buf[64];
-  const char *p = get_arg("Number of random jobs (1-20): ", buf, sizeof(buf));
-  if (!p)
-    return 1;
-  int count = atoi(p);
-  unsigned seed = 0;
-  if (cli_arg && getenv("SEED"))
-    seed = (unsigned)strtoul(getenv("SEED"), NULL, 10);
-  int r = scheduler_generate_random(jobs, &num_jobs, count, seed);
-  if (r == 0)
-    scheduler_display_jobs(jobs, num_jobs);
-  return r;
-}
-static int cmd_banker_file(void) {
-  char buf[256];
-  const char *p = get_arg("Path to Banker state file: ", buf, sizeof(buf));
-  return p ? banker_from_file(p) : 1;
-}
-static int cmd_add(void) { return scheduler_add_job(jobs, &num_jobs); }
-static int cmd_edit_pri(void) {
-  return scheduler_edit_job_priority(jobs, num_jobs);
-}
-static int cmd_quantum(void) { return scheduler_input_quantum(); }
-static int cmd_show(void) {
-  scheduler_display_jobs(jobs, num_jobs);
-  return 0;
-}
-static int cmd_fcfs(void) { return scheduler_run_fcfs(jobs, num_jobs); }
-static int cmd_rr(void) { return scheduler_run_rr(jobs, num_jobs); }
-static int cmd_priority(void) { return scheduler_run_priority(jobs, num_jobs); }
-static int cmd_compare(void) { return scheduler_compare_all(jobs, num_jobs); }
-static int cmd_demo(void);
-static int cmd_cleanup(void);
+static int run_demo(void);
 
 static const Command commands[] = {
-    {"input", "Input custom jobs (replace current list)", cmd_input, false},
-    {"jobs", "Load jobs from a file (arrival burst priority)", cmd_jobs_file,
-     false},
-    {"random", "Generate random jobs (env SEED=n to reproduce)", cmd_random,
-     false},
-    {"default", "Load default workload (5 jobs)", cmd_default, false},
-    {"add-job", "Add a new job to current workload", cmd_add, false},
-    {"edit-priority", "Change an existing job's priority", cmd_edit_pri, false},
-    {"set-quantum", "Set Round Robin time quantum", cmd_quantum, false},
-    {"show", "Display current jobs", cmd_show, true},
-    {"fcfs", "FCFS scheduling", cmd_fcfs, true},
-    {"rr", "Round Robin scheduling", cmd_rr, true},
-    {"priority", "Priority scheduling (non-preemptive)", cmd_priority, true},
-    {"compare", "Compare all scheduling policies", cmd_compare, true},
-    {"logger", "Producer-consumer logger (default benchmark)", logger_demo,
-     true},
-    {"logger-custom", "Producer-consumer logger (custom threads)",
-     logger_custom_run, false},
-    {"logger-msg", "Logger: submit custom message to queue",
-     logger_submit_event, false},
-    {"ipc", "Shared memory + semaphore IPC (benchmark)", ipc_demo, true},
-    {"ipc-custom", "Shared memory IPC: send custom job packet", ipc_custom,
-     false},
-    {"banker-safe", "Banker's algorithm: safe state", banker_demo_safe, true},
-    {"banker-unsafe", "Banker's algorithm: unsafe state", banker_demo_unsafe,
-     true},
-    {"banker-file", "Banker's algorithm: load state from file",
-     cmd_banker_file, false},
-    {"banker-input", "Banker's algorithm: enter your own state",
-     banker_input_and_check, false},
-    {"worker-ok", "Worker process: normal completion", worker_demo_normal,
-     true},
-    {"worker-fail", "Worker process: simulated failure", worker_demo_failure,
-     true},
-    {"worker-custom", "Worker process: custom simulated exit code",
-     worker_custom, false},
-    {"rlimit", "Resource limit demo (RLIMIT_CPU)", rlimit_demo_cpu, true},
-    {"demo", "Integrated demonstration", cmd_demo, false},
-    {"cleanup", "Verify cleanup of threads/IPC/processes", cmd_cleanup, false},
+    {"--fcfs", "FCFS scheduling", run_fcfs, 1},
+    {"--rr", "Round Robin scheduling", run_rr, 1},
+    {"--priority", "Priority scheduling (non-preemptive)", run_priority, 1},
+    {"--compare", "Compare all scheduling policies", run_compare, 1},
+    {"--logger", "Producer-consumer logger (threads)", run_logger, 1},
+    {"--ipc", "Shared memory + semaphore IPC", run_ipc, 1},
+    {"--banker-safe", "Banker's algorithm: safe state", run_banker_safe, 1},
+    {"--banker-unsafe", "Banker's algorithm: unsafe state", run_banker_unsafe,
+     1},
+    {"--worker-ok", "Worker process: normal exit", run_worker_ok, 1},
+    {"--worker-fail", "Worker process: simulated failure", run_worker_fail, 1},
+    {"--rlimit", "Resource limit demo (RLIMIT_CPU)", run_rlimit, 1},
+    {"--banker", "Banker's algorithm: custom state (--banker-file FILE, or typed)",
+     run_banker, 0},
+    {"--cleanup", "Verify IPC objects and children are cleaned up", run_cleanup,
+     0},
+    {"--demo", "Run everything and print a summary", run_demo, 0},
 };
-#define NUM_COMMANDS ((int)(sizeof(commands) / sizeof(commands[0])))
+#define NCMD ((int)(sizeof(commands) / sizeof(commands[0])))
 
-static int cmd_cleanup(void) {
-  logger_shutdown();
-  ipc_cleanup();
+/* Options that carry a number: --name N */
+static const struct {
+  const char *flag;
+  int *value;
+  int lo, hi;
+  const char *help;
+} num_opts[] = {
+    {"--quantum", &cfg.quantum, 1, 100, "Round Robin time quantum (default 2)"},
+    {"--producers", &cfg.producers, 1, 10, "logger producer threads (default 3)"},
+    {"--events", &cfg.events, 1, 20, "events per producer (default 4)"},
+    {"--job-id", &cfg.job_id, 1, 9999, "job ID sent over IPC (default 101)"},
+    {"--burst", &cfg.burst, 1, 100, "burst sent over IPC (default 5)"},
+    {"--exit-code", &cfg.exit_code, 1, 255, "simulated failure code (default 3)"},
+    {"--cpu-limit", &cfg.cpu_limit, 1, 10, "RLIMIT_CPU seconds (default 1)"},
+};
+#define NNUM ((int)(sizeof(num_opts) / sizeof(num_opts[0])))
 
-  int reaped = 0;
-  while (waitpid(-1, NULL, WNOHANG) > 0)
-    reaped++;
-  bool no_children = (waitpid(-1, NULL, WNOHANG) == -1 && errno == ECHILD);
-  int left = ipc_objects_remaining();
-
-  printf("\n=== Cleanup verification ===\n");
-  printf("Logger thread: stopped and joined, log file closed\n");
-  printf("Child processes: %d stray reaped, none remaining: %s\n", reaped,
-         no_children ? "yes" : "NO");
-  printf("IPC objects (shared memory + semaphores) remaining: %d\n", left);
-  return (no_children && left == 0) ? 0 : 1;
+static void usage(const char *prog) {
+  printf("Usage: %s [options] <command>\n\nCommands:\n", prog);
+  for (int i = 0; i < NCMD; i++)
+    printf("  %-16s %s\n", commands[i].flag, commands[i].help);
+  printf("  %-16s %s\n", "--help", "Show this message");
+  printf("\nOptions (put them before the command):\n");
+  printf("  %-16s %s\n", "--jobs FILE", "read jobs from a file (arrival burst priority)");
+  printf("  %-16s %s\n", "--input", "type the jobs in at the prompt");
+  printf("  %-16s %s\n", "--banker-file F", "Banker state from a file");
+  for (int i = 0; i < NNUM; i++)
+    printf("  %-16s %s\n", num_opts[i].flag, num_opts[i].help);
+  printf("\nExample: %s --jobs samples/jobs.txt --quantum 3 --compare\n", prog);
 }
 
-static int cmd_demo(void) {
-  int result[NUM_COMMANDS];
-  int failures = 0;
-
-  printf("\n=== Integrated demonstration ===\n");
-  for (int i = 0; i < NUM_COMMANDS; i++) {
+static int run_demo(void) {
+  int result[NCMD] = {0}, failed = 0;
+  for (int i = 0; i < NCMD; i++)
     if (commands[i].in_demo)
       result[i] = commands[i].run();
-  }
-  int cleanup_result = cmd_cleanup();
+  int cleanup = run_cleanup();
 
   printf("\n=== Summary ===\n");
-  for (int i = 0; i < NUM_COMMANDS; i++) {
-    if (!commands[i].in_demo)
-      continue;
-    printf("  %-14s %s\n", commands[i].flag, result[i] == 0 ? "PASS" : "FAIL");
-    failures += result[i] != 0;
-  }
-  printf("  %-14s %s\n", "cleanup", cleanup_result == 0 ? "PASS" : "FAIL");
-  failures += cleanup_result != 0;
-  printf("%d check(s) failed.\n", failures);
-  return failures != 0;
-}
-
-static void print_banner(void) {
-  printf("\nCampusCompute - Job Scheduling and Resource Management | %s\n",
-         get_srn());
-}
-
-static void print_menu(void) {
-  printf("\nCommands (type the number at the prompt, or run ./campuscompute "
-         "--<flag>):\n");
-  for (int i = 0; i < NUM_COMMANDS; i++) {
-    printf("  %2d  %-42s --%s\n", i + 1, commands[i].label, commands[i].flag);
-  }
-  printf("   0  Clean up and exit\n   ?  Show this menu\n");
-}
-
-static void run_interactive(void) {
-  char line[128];
-
-  print_banner();
-  print_menu();
-  while (1) {
-    printf("\nCampusCompute [%s] >> ", get_srn());
-    if (!fgets(line, sizeof(line), stdin))
-      break;
-    line[strcspn(line, "\r\n")] = '\0';
-    if (line[0] == '\0')
-      continue;
-    if (strcmp(line, "?") == 0 || strcmp(line, "help") == 0) {
-      print_menu();
-      continue;
+  for (int i = 0; i < NCMD; i++)
+    if (commands[i].in_demo) {
+      printf("  %-16s %s\n", commands[i].flag, result[i] ? "FAIL" : "PASS");
+      failed += result[i] != 0;
     }
+  printf("  %-16s %s\n", "--cleanup", cleanup ? "FAIL" : "PASS");
+  failed += cleanup != 0;
+  printf("%d check(s) failed.\n", failed);
+  return failed != 0;
+}
 
-    char *end;
-    long choice = strtol(line, &end, 10);
-    if (*end != '\0' || choice < 0 || choice > NUM_COMMANDS) {
-      printf("[Error] Invalid command \"%s\". Enter a number 0-%d or '?' for "
-             "the menu.\n",
-             line, NUM_COMMANDS);
-      continue;
-    }
-    if (choice == 0)
-      break;
-    commands[choice - 1].run();
-  }
-  cmd_cleanup();
-  printf("Goodbye.\n");
+static int bad_arg(const char *prog, const char *what, const char *arg) {
+  fprintf(stderr, "Error: %s '%s'\n", what, arg);
+  usage(prog);
+  return 1;
 }
 
 int main(int argc, char *argv[]) {
-  num_jobs = 0;
-  scheduler_load_default_jobs(jobs, &num_jobs);
+  const Command *cmd = NULL;
 
-  if (argc == 1) {
-    run_interactive();
-    return 0;
-  }
-  if (argc == 2 &&
-      (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-    print_banner();
-    print_menu();
-    return 0;
-  }
-  if (argc >= 2 && strncmp(argv[1], "--", 2) == 0) {
-    if (strcmp(argv[1] + 2, "quantum") == 0 ||
-        strcmp(argv[1] + 2, "set-quantum") == 0) {
-      if (argc >= 3) {
-        int q = atoi(argv[2]);
-        if (q >= 1 && q <= 100) {
-          scheduler_set_quantum(q);
-          printf("Round Robin time quantum set to %d.\n", q);
-          return 0;
-        }
-      }
-      return cmd_quantum();
+  for (int a = 1; a < argc; a++) {
+    const char *arg = argv[a];
+    int matched = 0;
+
+    if (!strcmp(arg, "--help") || !strcmp(arg, "-h")) {
+      usage(argv[0]);
+      return 0;
     }
-    if (strcmp(argv[1] + 2, "rr") == 0 && argc >= 3) {
-      int q = atoi(argv[2]);
-      if (q >= 1 && q <= 100)
-        scheduler_set_quantum(q);
-      return cmd_rr();
+    if (!strcmp(arg, "--input")) {
+      cfg.input_jobs = 1;
+      continue;
     }
-    /* Options: --jobs FILE | --random N | --banker-file FILE, optionally
-     * followed by --<command> to run on that data in the same invocation,
-     * e.g.  ./campuscompute --jobs my.txt --compare */
-    int i = 1;
-    while (i < argc && strncmp(argv[i], "--", 2) == 0) {
-      const char *name = argv[i] + 2;
-      int k;
-      for (k = 0; k < NUM_COMMANDS; k++)
-        if (strcmp(name, commands[k].flag) == 0)
-          break;
-      if (k == NUM_COMMANDS)
-        break;
-      bool takes_arg = strcmp(name, "jobs") == 0 ||
-                       strcmp(name, "random") == 0 ||
-                       strcmp(name, "banker-file") == 0;
-      cli_arg = NULL;
-      if (takes_arg) {
-        if (i + 1 >= argc) {
-          fprintf(stderr, "[Error] --%s needs an argument\n", name);
+    if (!strcmp(arg, "--jobs") || !strcmp(arg, "--banker-file")) {
+      if (a + 1 >= argc)
+        return bad_arg(argv[0], "missing value for", arg);
+      if (!strcmp(arg, "--jobs"))
+        cfg.jobs_file = argv[++a];
+      else
+        cfg.banker_file = argv[++a];
+      continue;
+    }
+    for (int i = 0; i < NNUM && !matched; i++)
+      if (!strcmp(arg, num_opts[i].flag)) {
+        char *end;
+        long v = a + 1 < argc ? strtol(argv[a + 1], &end, 10) : 0;
+        if (a + 1 >= argc || *end != '\0' || v < num_opts[i].lo ||
+            v > num_opts[i].hi) {
+          fprintf(stderr, "Error: %s needs a number from %d to %d\n", arg,
+                  num_opts[i].lo, num_opts[i].hi);
           return 1;
         }
-        cli_arg = argv[++i];
+        *num_opts[i].value = (int)v;
+        a++;
+        matched = 1;
       }
-      int rc = commands[k].run();
-      cli_arg = NULL;
-      if (rc != 0 || !takes_arg || i + 1 >= argc)
-        return rc;
-      i++; /* chain: data option consumed, run the next command */
-    }
+    if (matched)
+      continue;
+    for (int i = 0; i < NCMD && !matched; i++)
+      if (!strcmp(arg, commands[i].flag)) {
+        if (cmd)
+          return bad_arg(argv[0], "only one command allowed, got extra", arg);
+        cmd = &commands[i];
+        matched = 1;
+      }
+    if (!matched)
+      return bad_arg(argv[0], "invalid command or option", arg);
   }
-  fprintf(stderr, "[Error] Unknown option or arguments: '%s'\n",
-          argc > 1 ? argv[1] : "");
-  fprintf(
-      stderr,
-      "Usage: %s [--help | --<command>]   (see --help for the command list)\n",
-      argv[0]);
-  return 1;
+
+  if (!cmd) {
+    fprintf(stderr, "Error: no command given\n");
+    usage(argv[0]);
+    return 1;
+  }
+  return cmd->run();
 }
